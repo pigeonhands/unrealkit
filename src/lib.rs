@@ -7,7 +7,7 @@ mod version;
 
 pub use error::Error;
 pub use fname::{FName, GNames};
-pub use gobjects::GObjects;
+pub use gobjects::{FChunkedFixedUObjectArray, FFixedUObjectArray, FUObjectItem, GObjects};
 pub use uobject::{UClass, UField, UObject, UStruct};
 pub use version::UeVersion;
 

@@ -1,4 +1,5 @@
 use crate::fname::{FName, GNames};
+use crate::UeVersion;
 
 /// A live UObject in the target process's memory.
 ///
@@ -18,7 +19,7 @@ pub struct UObject<'a> {
 }
 
 impl<'a> UObject<'a> {
-    pub(crate) fn new(ptr: *const u8, names: &'a GNames) -> Self {
+    pub fn new(ptr: *const u8, names: &'a GNames) -> Self {
         Self { ptr, names }
     }
 
@@ -100,17 +101,14 @@ impl<'a> UObject<'a> {
 
 /// A UStruct — the base for UClass, UScriptStruct, and UFunction.
 ///
-/// UStruct layout (extends UField which extends UObject):
+/// Offsets differ between UE4.19 and UE4.25+/UE5 due to added FField support:
+///
 /// ```text
-/// UObject:        0x00 - 0x28
-/// UField:
-///   0x28: *const UField — Next (linked list of fields in parent)
-/// UStruct:
-///   0x30: *const UStruct — SuperStruct
-///   0x38: *const UField  — Children (head of child field linked list)
-///   0x40: *const FField  — ChildProperties (UE5, FProperty linked list)
-///   0x48: i32            — PropertiesSize
-///   ...more fields...
+/// UE4.19 (inherits UField @ 0x30):
+///   0x30: SuperStruct    0x38: Children    0x40: PropertiesSize
+///
+/// UE4.25+ / UE5 (inherits UField @ 0x30, +padding):
+///   0x40: SuperStruct    0x48: Children    0x50: ChildProperties    0x58: PropertiesSize
 /// ```
 pub struct UStruct<'a> {
     ptr: *const u8,
@@ -118,12 +116,16 @@ pub struct UStruct<'a> {
 }
 
 impl<'a> UStruct<'a> {
-    pub(crate) fn new(ptr: *const u8, names: &'a GNames) -> Self {
+    pub fn new(ptr: *const u8, names: &'a GNames) -> Self {
         Self { ptr, names }
     }
 
     pub fn ptr(&self) -> *const u8 {
         self.ptr
+    }
+
+    fn version(&self) -> UeVersion {
+        self.names.version()
     }
 
     pub fn as_object(&self) -> UObject<'a> {
@@ -134,9 +136,29 @@ impl<'a> UStruct<'a> {
         self.as_object().name()
     }
 
-    /// The parent struct in the inheritance chain.
+    fn super_struct_offset(&self) -> usize {
+        match self.version() {
+            UeVersion::Ue4 => 0x30,
+            UeVersion::Ue5 => 0x40,
+        }
+    }
+
+    fn children_offset(&self) -> usize {
+        match self.version() {
+            UeVersion::Ue4 => 0x38,
+            UeVersion::Ue5 => 0x48,
+        }
+    }
+
+    fn properties_size_offset(&self) -> usize {
+        match self.version() {
+            UeVersion::Ue4 => 0x40,
+            UeVersion::Ue5 => 0x58,
+        }
+    }
+
     pub fn super_struct(&self) -> Option<UStruct<'a>> {
-        let ptr = unsafe { *(self.ptr.add(0x30) as *const *const u8) };
+        let ptr = unsafe { *(self.ptr.add(self.super_struct_offset()) as *const *const u8) };
         if ptr.is_null() {
             None
         } else {
@@ -144,17 +166,14 @@ impl<'a> UStruct<'a> {
         }
     }
 
-    /// Head of the children linked list (UField chain — UE4 style).
     pub fn children_ptr(&self) -> *const u8 {
-        unsafe { *(self.ptr.add(0x38) as *const *const u8) }
+        unsafe { *(self.ptr.add(self.children_offset()) as *const *const u8) }
     }
 
-    /// Size of this struct's properties in bytes.
     pub fn properties_size(&self) -> i32 {
-        unsafe { *(self.ptr.add(0x48) as *const i32) }
+        unsafe { *(self.ptr.add(self.properties_size_offset()) as *const i32) }
     }
 
-    /// Iterate UField children (functions, old-style properties).
     pub fn children(&self) -> UFieldIter<'a> {
         UFieldIter {
             current: self.children_ptr(),
@@ -177,7 +196,7 @@ pub struct UClass<'a> {
 }
 
 impl<'a> UClass<'a> {
-    pub(crate) fn new(ptr: *const u8, names: &'a GNames) -> Self {
+    pub fn new(ptr: *const u8, names: &'a GNames) -> Self {
         Self { ptr, names }
     }
 
